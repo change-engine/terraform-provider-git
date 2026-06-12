@@ -1,6 +1,6 @@
 # Terraform Provider Git
 
-Terraform provider scaffold for managing individual text files in Git repositories.
+Terraform provider for managing individual text files in Git repositories.
 
 The provider uses the Terraform Plugin Framework and `github.com/go-git/go-git/v6` for native Git operations.
 
