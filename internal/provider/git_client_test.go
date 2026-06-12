@@ -91,6 +91,32 @@ func TestCloneManagerReadFile(t *testing.T) {
 	}
 }
 
+func TestCloneManagerReusesSyncedRepositoryForReads(t *testing.T) {
+	remoteURL := newBareRemote(t, map[string]string{
+		"a.txt": "a1\n",
+		"b.txt": "b1\n",
+	})
+	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{})
+
+	first, err := manager.ReadFile(remoteURL, testBranch, "a.txt")
+	if err != nil {
+		t.Fatalf("ReadFile(a.txt) error = %v", err)
+	}
+
+	externalCommit(t, remoteURL, "b.txt", "b2\n")
+
+	second, err := manager.ReadFile(remoteURL, testBranch, "b.txt")
+	if err != nil {
+		t.Fatalf("ReadFile(b.txt) error = %v", err)
+	}
+	if second.Content != "b1\n" {
+		t.Fatalf("ReadFile(b.txt) content = %q, want cached content %q", second.Content, "b1\n")
+	}
+	if second.CommitSHA != first.CommitSHA {
+		t.Fatalf("ReadFile(b.txt) commit = %q, want initial synced commit %q", second.CommitSHA, first.CommitSHA)
+	}
+}
+
 func TestCloneManagerWriteUpdateNoopAndDelete(t *testing.T) {
 	remoteURL := newBareRemote(t, map[string]string{"README.md": "base\n"})
 	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{})

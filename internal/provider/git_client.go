@@ -35,8 +35,10 @@ type cloneManager struct {
 }
 
 type managedClone struct {
-	mu  sync.Mutex
-	dir string
+	mu     sync.Mutex
+	dir    string
+	repo   *gogit.Repository
+	synced bool
 }
 
 type gitFileInfo struct {
@@ -86,14 +88,20 @@ func (m *cloneManager) withRepo(repositoryURL, branch string, fn func(*gogit.Rep
 	clone.mu.Lock()
 	defer clone.mu.Unlock()
 
-	repo, err := m.openOrClone(repositoryURL, branch, clone.dir)
-	if err != nil {
-		return err
+	if clone.repo == nil {
+		repo, err := m.openOrClone(repositoryURL, branch, clone.dir)
+		if err != nil {
+			return err
+		}
+		clone.repo = repo
 	}
-	if err := m.fetchAndReset(repo, branch); err != nil {
-		return err
+	if !clone.synced {
+		if err := m.fetchAndReset(clone.repo, branch); err != nil {
+			return err
+		}
+		clone.synced = true
 	}
-	return fn(repo, clone.dir)
+	return fn(clone.repo, clone.dir)
 }
 
 func (m *cloneManager) ReadFile(repositoryURL, branch, repoPath string) (gitFileInfo, error) {
