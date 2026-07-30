@@ -3,7 +3,7 @@ module github.com/change-engine/terraform-provider-git
 go 1.25.0
 
 require (
-	github.com/go-git/go-git/v6 v6.0.0-alpha.4
+	github.com/go-git/go-git/v6 v6.0.0-alpha.5
 	github.com/hashicorp/terraform-plugin-framework v1.19.0
 	golang.org/x/crypto v0.54.0
 )
@@ -15,7 +15,7 @@ require (
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/go-git/gcfg/v2 v2.0.2 // indirect
-	github.com/go-git/go-billy/v6 v6.0.0-alpha.1 // indirect
+	github.com/go-git/go-billy/v6 v6.0.0-alpha.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
 	github.com/hashicorp/go-plugin v1.8.0 // indirect
@@ -35,7 +35,7 @@ require (
 	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
-	golang.org/x/net v0.56.0 // indirect
+	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
