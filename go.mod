@@ -1,11 +1,11 @@
 module github.com/change-engine/terraform-provider-git
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/go-git/go-git/v6 v6.0.0-alpha.5
 	github.com/hashicorp/terraform-plugin-framework v1.19.0
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 )
 
 require (
