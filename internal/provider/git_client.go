@@ -26,9 +26,14 @@ import (
 
 var errGitFileNotFound = errors.New("git file not found")
 
+// pushAttempts bounds how often a write is replayed after its push is rejected
+// because the remote branch moved underneath it.
+const pushAttempts = 3
+
 type cloneManager struct {
-	cacheDir string
-	auth     authConfig
+	cacheDir   string
+	auth       authConfig
+	pushBranch string
 
 	mu     sync.Mutex
 	clones map[string]*managedClone
@@ -65,12 +70,27 @@ type commitOptions struct {
 	AuthorEmail string
 }
 
-func newCloneManager(cacheDir string, auth authConfig) *cloneManager {
+// pushError marks a failed push so the write can be replayed on a fresh view of the remote.
+type pushError struct{ err error }
+
+func (e pushError) Error() string { return e.err.Error() }
+func (e pushError) Unwrap() error { return e.err }
+
+func newCloneManager(cacheDir string, auth authConfig, pushBranch string) *cloneManager {
 	return &cloneManager{
-		cacheDir: cacheDir,
-		auth:     auth,
-		clones:   map[string]*managedClone{},
+		cacheDir:   cacheDir,
+		auth:       auth,
+		pushBranch: pushBranch,
+		clones:     map[string]*managedClone{},
 	}
+}
+
+// workBranch is the branch reads come from and commits go to for a resource on branch.
+func (m *cloneManager) workBranch(branch string) string {
+	if m.pushBranch != "" {
+		return m.pushBranch
+	}
+	return branch
 }
 
 func (m *cloneManager) withRepo(repositoryURL, branch string, fn func(*gogit.Repository, string) error) error {
@@ -102,6 +122,23 @@ func (m *cloneManager) withRepo(repositoryURL, branch string, fn func(*gogit.Rep
 	return fn(repo, clone.dir)
 }
 
+// withRepoPushRetry is withRepo for writes: when fn's push is rejected, the clone
+// is resynced from the remote and fn runs again, re-checking expected content.
+func (m *cloneManager) withRepoPushRetry(repositoryURL, branch string, fn func(*gogit.Repository, string) error) error {
+	return m.withRepo(repositoryURL, branch, func(repo *gogit.Repository, workDir string) error {
+		for attempt := 1; ; attempt++ {
+			err := fn(repo, workDir)
+			var rejected pushError
+			if !errors.As(err, &rejected) || attempt == pushAttempts {
+				return err
+			}
+			if err := m.fetchAndReset(repo, branch); err != nil {
+				return err
+			}
+		}
+	})
+}
+
 func (m *cloneManager) ReadFile(repositoryURL, branch, repoPath string) (gitFileInfo, error) {
 	var info gitFileInfo
 	err := m.withRepo(repositoryURL, branch, func(repo *gogit.Repository, workDir string) error {
@@ -125,7 +162,8 @@ func (m *cloneManager) ReadFile(repositoryURL, branch, repoPath string) (gitFile
 
 func (m *cloneManager) WriteFile(repositoryURL, branch, repoPath, desiredContent string, expectedContent *string, opts commitOptions) (gitWriteResult, error) {
 	var result gitWriteResult
-	err := m.withRepo(repositoryURL, branch, func(repo *gogit.Repository, workDir string) error {
+	err := m.withRepoPushRetry(repositoryURL, branch, func(repo *gogit.Repository, workDir string) error {
+		result = gitWriteResult{}
 		head, err := headSHA(repo)
 		if err != nil {
 			return err
@@ -158,8 +196,8 @@ func (m *cloneManager) WriteFile(repositoryURL, branch, repoPath, desiredContent
 		if err != nil {
 			return err
 		}
-		if err := pushBranch(repo, branch, m.auth); err != nil {
-			return err
+		if err := pushBranch(repo, m.workBranch(branch), m.auth); err != nil {
+			return pushError{err}
 		}
 		result.Changed = true
 		result.CommitSHA = commitSHA
@@ -171,7 +209,8 @@ func (m *cloneManager) WriteFile(repositoryURL, branch, repoPath, desiredContent
 
 func (m *cloneManager) DeleteFile(repositoryURL, branch, repoPath string, expectedContent *string, opts commitOptions) (gitDeleteResult, error) {
 	var result gitDeleteResult
-	err := m.withRepo(repositoryURL, branch, func(repo *gogit.Repository, workDir string) error {
+	err := m.withRepoPushRetry(repositoryURL, branch, func(repo *gogit.Repository, workDir string) error {
+		result = gitDeleteResult{}
 		head, err := headSHA(repo)
 		if err != nil {
 			return err
@@ -201,8 +240,8 @@ func (m *cloneManager) DeleteFile(repositoryURL, branch, repoPath string, expect
 		if err != nil {
 			return err
 		}
-		if err := pushBranch(repo, branch, m.auth); err != nil {
-			return err
+		if err := pushBranch(repo, m.workBranch(branch), m.auth); err != nil {
+			return pushError{err}
 		}
 		result.Changed = true
 		result.CommitSHA = commitSHA
@@ -212,7 +251,7 @@ func (m *cloneManager) DeleteFile(repositoryURL, branch, repoPath string, expect
 }
 
 func (m *cloneManager) cloneKey(repositoryURL, branch string) string {
-	hash := sha256.Sum256([]byte(repositoryURL + "\x00" + branch + "\x00" + m.auth.fingerprint()))
+	hash := sha256.Sum256([]byte(repositoryURL + "\x00" + branch + "\x00" + m.pushBranch + "\x00" + m.auth.fingerprint()))
 	return hex.EncodeToString(hash[:])
 }
 
@@ -246,12 +285,26 @@ func (m *cloneManager) openOrClone(repositoryURL, branch, dir string) (*gogit.Re
 	return repo, nil
 }
 
+// fetchAndReset points the local work branch at the remote work branch, or at
+// the remote branch when the work branch does not exist yet.
 func (m *cloneManager) fetchAndReset(repo *gogit.Repository, branch string) error {
+	work := m.workBranch(branch)
+	source := branch
+	if work != branch {
+		exists, err := m.remoteBranchExists(repo, work)
+		if err != nil {
+			return err
+		}
+		if exists {
+			source = work
+		}
+	}
+
 	err := repo.Fetch(&gogit.FetchOptions{
 		RemoteName:    "origin",
 		ClientOptions: authClientOptions(m.auth),
 		RefSpecs: []config.RefSpec{
-			config.RefSpec("+refs/heads/" + branch + ":refs/remotes/origin/" + branch),
+			config.RefSpec("+refs/heads/" + source + ":refs/remotes/origin/" + source),
 		},
 		Force:    true,
 		Progress: io.Discard,
@@ -260,11 +313,11 @@ func (m *cloneManager) fetchAndReset(repo *gogit.Repository, branch string) erro
 		return err
 	}
 
-	remoteRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", branch), true)
+	remoteRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", source), true)
 	if err != nil {
 		return err
 	}
-	localRefName := plumbing.NewBranchReferenceName(branch)
+	localRefName := plumbing.NewBranchReferenceName(work)
 	if err := repo.Storer.SetReference(plumbing.NewHashReference(localRefName, remoteRef.Hash())); err != nil {
 		return err
 	}
@@ -275,7 +328,30 @@ func (m *cloneManager) fetchAndReset(repo *gogit.Repository, branch string) erro
 	if err := wt.Checkout(&gogit.CheckoutOptions{Branch: localRefName, Force: true}); err != nil {
 		return err
 	}
-	return wt.Reset(&gogit.ResetOptions{Commit: remoteRef.Hash(), Mode: gogit.HardReset})
+	if err := wt.Reset(&gogit.ResetOptions{Commit: remoteRef.Hash(), Mode: gogit.HardReset}); err != nil {
+		return err
+	}
+	// A hard reset leaves files from discarded commits behind as untracked, which
+	// would read back as content the remote does not have.
+	return wt.Clean(&gogit.CleanOptions{Dir: true})
+}
+
+func (m *cloneManager) remoteBranchExists(repo *gogit.Repository, branch string) (bool, error) {
+	remote, err := repo.Remote("origin")
+	if err != nil {
+		return false, err
+	}
+	refs, err := remote.List(&gogit.ListOptions{ClientOptions: authClientOptions(m.auth)})
+	if err != nil {
+		return false, err
+	}
+	name := plumbing.NewBranchReferenceName(branch)
+	for _, ref := range refs {
+		if ref.Name() == name {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func stageAndCommitSinglePath(repo *gogit.Repository, repoPath string, opts commitOptions) (string, error) {

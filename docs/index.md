@@ -14,6 +14,23 @@ provider "git" {
 }
 ```
 
+## Staging Changes on a Branch
+
+Set `push_branch` to push every commit to one branch instead of each resource's `branch`, for example to review the changes as a pull request:
+
+```hcl
+provider "git" {
+  push_branch = "terraform/sync"
+}
+```
+
+- While `push_branch` exists on the remote, files are read from it and commits are added to it.
+- When it does not exist, files are read from the resource's `branch` and the first write creates `push_branch` from it.
+- Once the branch is merged and deleted, reads fall back to `branch`, so merged content plans as unchanged.
+- To discard staged changes, delete the branch; the next write starts again from `branch`.
+
+A push rejected because the remote branch moved is retried on a fresh fetch, re-checking each file for drift. This applies with or without `push_branch`.
+
 ## Authentication
 
 HTTPS authentication:

@@ -72,7 +72,7 @@ func TestValidateAuthConfig(t *testing.T) {
 
 func TestCloneManagerReadFile(t *testing.T) {
 	remoteURL := newBareRemote(t, map[string]string{"README.md": "hello\n"})
-	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{})
+	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{}, "")
 
 	info, err := manager.ReadFile(remoteURL, testBranch, "README.md")
 	if err != nil {
@@ -96,7 +96,7 @@ func TestCloneManagerReusesSyncedRepositoryForReads(t *testing.T) {
 		"a.txt": "a1\n",
 		"b.txt": "b1\n",
 	})
-	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{})
+	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{}, "")
 
 	first, err := manager.ReadFile(remoteURL, testBranch, "a.txt")
 	if err != nil {
@@ -119,7 +119,7 @@ func TestCloneManagerReusesSyncedRepositoryForReads(t *testing.T) {
 
 func TestCloneManagerWriteUpdateNoopAndDelete(t *testing.T) {
 	remoteURL := newBareRemote(t, map[string]string{"README.md": "base\n"})
-	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{})
+	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{}, "")
 	initialCommits := countRemoteCommits(t, remoteURL)
 
 	createResult, err := manager.WriteFile(remoteURL, testBranch, "dir/file.txt", "one\n", nil, testCommitOptions("create"))
@@ -180,7 +180,7 @@ func TestCloneManagerWriteUpdateNoopAndDelete(t *testing.T) {
 
 func TestCloneManagerDriftFailure(t *testing.T) {
 	remoteURL := newBareRemote(t, map[string]string{"file.txt": "state\n"})
-	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{})
+	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{}, "")
 
 	externalCommit(t, remoteURL, "file.txt", "remote\n")
 
@@ -196,7 +196,7 @@ func TestCloneManagerDriftFailure(t *testing.T) {
 
 func TestCloneManagerSharedCloneSerializesOperations(t *testing.T) {
 	remoteURL := newBareRemote(t, map[string]string{"README.md": "base\n"})
-	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{})
+	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{}, "")
 	initialCommits := countRemoteCommits(t, remoteURL)
 
 	var wg sync.WaitGroup
@@ -231,6 +231,114 @@ func TestCloneManagerSharedCloneSerializesOperations(t *testing.T) {
 	}
 	if got := len(manager.clones); got != 1 {
 		t.Fatalf("clone count = %d, want 1", got)
+	}
+}
+
+const testPushBranch = "sync"
+
+func TestCloneManagerPushBranchCreatedFromBranch(t *testing.T) {
+	remoteURL := newBareRemote(t, map[string]string{"README.md": "base\n"})
+	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{}, testPushBranch)
+	initialCommits := countRemoteCommits(t, remoteURL)
+
+	info, err := manager.ReadFile(remoteURL, testBranch, "README.md")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if info.Content != "base\n" {
+		t.Fatalf("ReadFile() content = %q, want branch content", info.Content)
+	}
+	if remoteBranchExists(t, remoteURL, testPushBranch) {
+		t.Fatalf("push branch exists after read")
+	}
+
+	if _, err := manager.WriteFile(remoteURL, testBranch, "a.txt", "a\n", nil, testCommitOptions("create a")); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if got := readRemoteBranchFile(t, remoteURL, testPushBranch, "a.txt"); got != "a\n" {
+		t.Fatalf("push branch a.txt = %q", got)
+	}
+	if got := countRemoteBranchCommits(t, remoteURL, testPushBranch); got != initialCommits+1 {
+		t.Fatalf("push branch commit count = %d, want %d", got, initialCommits+1)
+	}
+	if got := countRemoteCommits(t, remoteURL); got != initialCommits {
+		t.Fatalf("branch commit count = %d, want unchanged %d", got, initialCommits)
+	}
+}
+
+func TestCloneManagerPushBranchReusedWhenPresent(t *testing.T) {
+	remoteURL := newBareRemote(t, map[string]string{"README.md": "base\n"})
+	initialCommits := countRemoteCommits(t, remoteURL)
+
+	first := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{}, testPushBranch)
+	if _, err := first.WriteFile(remoteURL, testBranch, "README.md", "staged\n", nil, testCommitOptions("stage")); err != nil {
+		t.Fatalf("WriteFile(stage) error = %v", err)
+	}
+
+	second := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{}, testPushBranch)
+	info, err := second.ReadFile(remoteURL, testBranch, "README.md")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if info.Content != "staged\n" {
+		t.Fatalf("ReadFile() content = %q, want push branch content", info.Content)
+	}
+
+	expected := "staged\n"
+	if _, err := second.WriteFile(remoteURL, testBranch, "README.md", "again\n", &expected, testCommitOptions("again")); err != nil {
+		t.Fatalf("WriteFile(again) error = %v", err)
+	}
+	if got := countRemoteBranchCommits(t, remoteURL, testPushBranch); got != initialCommits+2 {
+		t.Fatalf("push branch commit count = %d, want %d", got, initialCommits+2)
+	}
+	if got := readRemoteFile(t, remoteURL, "README.md"); got != "base\n" {
+		t.Fatalf("branch README.md = %q, want untouched", got)
+	}
+}
+
+func TestCloneManagerRetriesRejectedPush(t *testing.T) {
+	for name, pushBranch := range map[string]string{
+		"branch":      "",
+		"push branch": testPushBranch,
+	} {
+		t.Run(name, func(t *testing.T) {
+			remoteURL := newBareRemote(t, map[string]string{"README.md": "base\n"})
+			manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{}, pushBranch)
+			work := manager.workBranch(testBranch)
+
+			if _, err := manager.WriteFile(remoteURL, testBranch, "a.txt", "a\n", nil, testCommitOptions("create a")); err != nil {
+				t.Fatalf("WriteFile(a.txt) error = %v", err)
+			}
+			externalBranchCommit(t, remoteURL, work, "b.txt", "b\n")
+
+			if _, err := manager.WriteFile(remoteURL, testBranch, "c.txt", "c\n", nil, testCommitOptions("create c")); err != nil {
+				t.Fatalf("WriteFile(c.txt) error = %v", err)
+			}
+			for repoPath, want := range map[string]string{"a.txt": "a\n", "b.txt": "b\n", "c.txt": "c\n"} {
+				if got := readRemoteBranchFile(t, remoteURL, work, repoPath); got != want {
+					t.Fatalf("%s = %q, want %q", repoPath, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestCloneManagerRetryRechecksDrift(t *testing.T) {
+	remoteURL := newBareRemote(t, map[string]string{"file.txt": "state\n"})
+	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{}, "")
+
+	if _, err := manager.ReadFile(remoteURL, testBranch, "file.txt"); err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	externalCommit(t, remoteURL, "file.txt", "remote\n")
+
+	expected := "state\n"
+	_, err := manager.WriteFile(remoteURL, testBranch, "file.txt", "desired\n", &expected, testCommitOptions("update"))
+	if err == nil || !strings.Contains(err.Error(), "changed outside Terraform") {
+		t.Fatalf("WriteFile() drift error = %v", err)
+	}
+	if got := readRemoteFile(t, remoteURL, "file.txt"); got != "remote\n" {
+		t.Fatalf("remote content after rejected drift update = %q", got)
 	}
 }
 
@@ -276,9 +384,18 @@ func newBareRemote(t *testing.T, files map[string]string) string {
 
 func readRemoteFile(t *testing.T, remoteURL, repoPath string) string {
 	t.Helper()
+	return readRemoteBranchFile(t, remoteURL, testBranch, repoPath)
+}
+
+func readRemoteBranchFile(t *testing.T, remoteURL, branch, repoPath string) string {
+	t.Helper()
 
 	cloneDir := filepath.Join(t.TempDir(), "clone")
-	repo, err := gogit.PlainClone(cloneDir, &gogit.CloneOptions{URL: remoteURL})
+	repo, err := gogit.PlainClone(cloneDir, &gogit.CloneOptions{
+		URL:           remoteURL,
+		ReferenceName: plumbing.NewBranchReferenceName(branch),
+		SingleBranch:  true,
+	})
 	if err != nil {
 		t.Fatalf("PlainClone(read) error = %v", err)
 	}
@@ -292,9 +409,18 @@ func readRemoteFile(t *testing.T, remoteURL, repoPath string) string {
 
 func externalCommit(t *testing.T, remoteURL, repoPath, content string) {
 	t.Helper()
+	externalBranchCommit(t, remoteURL, testBranch, repoPath, content)
+}
+
+func externalBranchCommit(t *testing.T, remoteURL, branch, repoPath, content string) {
+	t.Helper()
 
 	cloneDir := filepath.Join(t.TempDir(), "external")
-	repo, err := gogit.PlainClone(cloneDir, &gogit.CloneOptions{URL: remoteURL})
+	repo, err := gogit.PlainClone(cloneDir, &gogit.CloneOptions{
+		URL:           remoteURL,
+		ReferenceName: plumbing.NewBranchReferenceName(branch),
+		SingleBranch:  true,
+	})
 	if err != nil {
 		t.Fatalf("PlainClone(external) error = %v", err)
 	}
@@ -321,14 +447,14 @@ func externalCommit(t *testing.T, remoteURL, repoPath, content string) {
 	}
 	if err := repo.Push(&gogit.PushOptions{
 		RefSpecs: []config.RefSpec{
-			config.RefSpec("refs/heads/" + testBranch + ":refs/heads/" + testBranch),
+			config.RefSpec("refs/heads/" + branch + ":refs/heads/" + branch),
 		},
 	}); err != nil {
 		t.Fatalf("Push(external) error = %v", err)
 	}
 }
 
-func countRemoteCommits(t *testing.T, remoteURL string) int {
+func remoteBranchExists(t *testing.T, remoteURL, branch string) bool {
 	t.Helper()
 
 	repo, err := gogit.PlainOpen(remoteURL)
@@ -336,9 +462,32 @@ func countRemoteCommits(t *testing.T, remoteURL string) int {
 		t.Fatalf("PlainOpen(remote) error = %v", err)
 	}
 	defer func() { _ = repo.Close() }()
-	ref, err := repo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	_, err = repo.Reference(plumbing.NewBranchReferenceName(branch), true)
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return false
+	}
 	if err != nil {
-		t.Fatalf("Reference(%s) error = %v", testBranch, err)
+		t.Fatalf("Reference(%s) error = %v", branch, err)
+	}
+	return true
+}
+
+func countRemoteCommits(t *testing.T, remoteURL string) int {
+	t.Helper()
+	return countRemoteBranchCommits(t, remoteURL, testBranch)
+}
+
+func countRemoteBranchCommits(t *testing.T, remoteURL, branch string) int {
+	t.Helper()
+
+	repo, err := gogit.PlainOpen(remoteURL)
+	if err != nil {
+		t.Fatalf("PlainOpen(remote) error = %v", err)
+	}
+	defer func() { _ = repo.Close() }()
+	ref, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)
+	if err != nil {
+		t.Fatalf("Reference(%s) error = %v", branch, err)
 	}
 	iter, err := repo.Log(&gogit.LogOptions{From: ref.Hash()})
 	if err != nil {

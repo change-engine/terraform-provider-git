@@ -35,6 +35,7 @@ type providerModel struct {
 	AuthorName            types.String `tfsdk:"author_name"`
 	AuthorEmail           types.String `tfsdk:"author_email"`
 	CommitMessagePrefix   types.String `tfsdk:"commit_message_prefix"`
+	PushBranch            types.String `tfsdk:"push_branch"`
 }
 
 type providerConfig struct {
@@ -43,6 +44,7 @@ type providerConfig struct {
 	AuthorName          string
 	AuthorEmail         string
 	CommitMessagePrefix string
+	PushBranch          string
 	Manager             *cloneManager
 }
 
@@ -106,6 +108,10 @@ func (p *gitProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *
 				Optional:            true,
 				MarkdownDescription: "Prefix added to default commit messages.",
 			},
+			"push_branch": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Branch to push commits to instead of each resource's `branch`. Reads come from it while it exists on the remote, and from `branch` otherwise; the first write creates it from `branch`. Use it to stage changes for review, for example as a pull request.",
+			},
 		},
 	}
 }
@@ -145,6 +151,7 @@ func configFromModel(model providerModel) (*providerConfig, error) {
 		AuthorName:          stringValue(model.AuthorName),
 		AuthorEmail:         stringValue(model.AuthorEmail),
 		CommitMessagePrefix: stringValue(model.CommitMessagePrefix),
+		PushBranch:          stringValue(model.PushBranch),
 		Auth:                authConfig{},
 	}
 	cfg.Auth.Username = stringValue(model.Username)
@@ -166,7 +173,7 @@ func configFromModel(model providerModel) (*providerConfig, error) {
 		return nil, err
 	}
 
-	cfg.Manager = newCloneManager(cfg.CacheDir, cfg.Auth)
+	cfg.Manager = newCloneManager(cfg.CacheDir, cfg.Auth, cfg.PushBranch)
 	return cfg, nil
 }
 
