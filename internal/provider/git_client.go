@@ -160,7 +160,10 @@ func (m *cloneManager) ReadFile(repositoryURL, branch, repoPath string) (gitFile
 	return info, err
 }
 
-func (m *cloneManager) WriteFile(repositoryURL, branch, repoPath, desiredContent string, expectedContent *string, opts commitOptions) (gitWriteResult, error) {
+// WriteFile commits desiredContent at repoPath. With expectedContent set (an update) the
+// remote file must still hold it. Without it (a create) an existing file with other
+// content is only replaced when overwrite is set.
+func (m *cloneManager) WriteFile(repositoryURL, branch, repoPath, desiredContent string, expectedContent *string, overwrite bool, opts commitOptions) (gitWriteResult, error) {
 	var result gitWriteResult
 	err := m.withRepoPushRetry(repositoryURL, branch, func(repo *gogit.Repository, workDir string) error {
 		result = gitWriteResult{}
@@ -182,6 +185,8 @@ func (m *cloneManager) WriteFile(repositoryURL, branch, repoPath, desiredContent
 			if currentContent != *expectedContent {
 				return fmt.Errorf("remote file %q changed outside Terraform; refusing to overwrite drifted state", repoPath)
 			}
+		} else if currentExists && currentContent != desiredContent && !overwrite {
+			return fmt.Errorf("remote file %q already exists with different content; refusing to overwrite it on create (set overwrite_on_create to replace it)", repoPath)
 		}
 		if currentExists && currentContent == desiredContent {
 			result.CommitSHA = head

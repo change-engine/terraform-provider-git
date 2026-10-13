@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -33,6 +34,7 @@ type gitFileResourceModel struct {
 	CommitMessage       types.String `tfsdk:"commit_message"`
 	AuthorName          types.String `tfsdk:"author_name"`
 	AuthorEmail         types.String `tfsdk:"author_email"`
+	OverwriteOnCreate   types.Bool   `tfsdk:"overwrite_on_create"`
 	ID                  types.String `tfsdk:"id"`
 	CommitSHA           types.String `tfsdk:"commit_sha"`
 	BlobSHA             types.String `tfsdk:"blob_sha"`
@@ -74,6 +76,12 @@ func (r *gitFileResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"author_email": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "Git author email for commits created by this resource.",
+			},
+			"overwrite_on_create": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(false),
+				MarkdownDescription: "Replace a file that already exists with different content when the resource is created. Defaults to `false`, which fails the create instead.",
 			},
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -123,6 +131,7 @@ func (r *gitFileResource) Create(ctx context.Context, req resource.CreateRequest
 		plan.Path.ValueString(),
 		plan.Content.ValueString(),
 		nil,
+		plan.OverwriteOnCreate.ValueBool(),
 		r.commitOptions(plan, "Create "+plan.Path.ValueString()),
 	)
 	if err != nil {
@@ -153,6 +162,10 @@ func (r *gitFileResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 	state.Content = types.StringValue(info.Content)
+	// State written before overwrite_on_create existed holds null; fill in the default so it plans as unchanged.
+	if state.OverwriteOnCreate.IsNull() {
+		state.OverwriteOnCreate = types.BoolValue(false)
+	}
 	state.CommitSHA = types.StringValue(info.CommitSHA)
 	state.BlobSHA = types.StringValue(info.BlobSHA)
 	state.LastRemoteCommitSHA = types.StringValue(info.CommitSHA)
@@ -179,6 +192,7 @@ func (r *gitFileResource) Update(ctx context.Context, req resource.UpdateRequest
 		plan.Path.ValueString(),
 		plan.Content.ValueString(),
 		&expected,
+		false,
 		r.commitOptions(plan, "Update "+plan.Path.ValueString()),
 	)
 	if err != nil {
