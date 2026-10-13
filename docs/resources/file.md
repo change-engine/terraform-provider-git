@@ -1,6 +1,6 @@
 # git_file Resource
 
-Manages one text file in a Git repository branch. Create, update, and delete each create one commit and push it to the remote branch. Refresh reads remote content into Terraform state. Apply-time updates and deletes refuse to proceed if the remote file has changed since the state OpenTofu planned from.
+Manages one text file in a Git repository branch. Create, update, and delete each create one commit and push it to the remote branch. Refresh reads remote content into Terraform state. Apply-time updates and deletes refuse to proceed if the remote file has changed since the state OpenTofu planned from. Creates refuse to replace a file that already exists with different content unless `overwrite_on_create` is set; this matters when a resource drops out of state, for example because its file moved, and `lifecycle { ignore_changes }` would otherwise not stop the file being rewritten.
 
 ## Example
 
@@ -31,6 +31,7 @@ Optional:
 - `commit_message` - Commit message for resource operations.
 - `author_name` - Commit author name override.
 - `author_email` - Commit author email override.
+- `overwrite_on_create` - Replace an existing file with different content on create. Defaults to `false`.
 
 Computed:
 

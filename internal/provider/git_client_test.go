@@ -122,7 +122,7 @@ func TestCloneManagerWriteUpdateNoopAndDelete(t *testing.T) {
 	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{}, "")
 	initialCommits := countRemoteCommits(t, remoteURL)
 
-	createResult, err := manager.WriteFile(remoteURL, testBranch, "dir/file.txt", "one\n", nil, testCommitOptions("create"))
+	createResult, err := manager.WriteFile(remoteURL, testBranch, "dir/file.txt", "one\n", nil, true, testCommitOptions("create"))
 	if err != nil {
 		t.Fatalf("WriteFile(create) error = %v", err)
 	}
@@ -137,7 +137,7 @@ func TestCloneManagerWriteUpdateNoopAndDelete(t *testing.T) {
 	}
 
 	expected := "one\n"
-	noopResult, err := manager.WriteFile(remoteURL, testBranch, "dir/file.txt", "one\n", &expected, testCommitOptions("noop"))
+	noopResult, err := manager.WriteFile(remoteURL, testBranch, "dir/file.txt", "one\n", &expected, true, testCommitOptions("noop"))
 	if err != nil {
 		t.Fatalf("WriteFile(noop) error = %v", err)
 	}
@@ -148,7 +148,7 @@ func TestCloneManagerWriteUpdateNoopAndDelete(t *testing.T) {
 		t.Fatalf("commit count after noop = %d, want %d", got, initialCommits+1)
 	}
 
-	updateResult, err := manager.WriteFile(remoteURL, testBranch, "dir/file.txt", "two\n", &expected, testCommitOptions("update"))
+	updateResult, err := manager.WriteFile(remoteURL, testBranch, "dir/file.txt", "two\n", &expected, true, testCommitOptions("update"))
 	if err != nil {
 		t.Fatalf("WriteFile(update) error = %v", err)
 	}
@@ -185,12 +185,44 @@ func TestCloneManagerDriftFailure(t *testing.T) {
 	externalCommit(t, remoteURL, "file.txt", "remote\n")
 
 	expected := "state\n"
-	_, err := manager.WriteFile(remoteURL, testBranch, "file.txt", "desired\n", &expected, testCommitOptions("update"))
+	_, err := manager.WriteFile(remoteURL, testBranch, "file.txt", "desired\n", &expected, true, testCommitOptions("update"))
 	if err == nil || !strings.Contains(err.Error(), "changed outside Terraform") {
 		t.Fatalf("WriteFile() drift error = %v", err)
 	}
 	if got := readRemoteFile(t, remoteURL, "file.txt"); got != "remote\n" {
 		t.Fatalf("remote content after rejected drift update = %q", got)
+	}
+}
+
+func TestCloneManagerCreateRefusesExistingFile(t *testing.T) {
+	remoteURL := newBareRemote(t, map[string]string{"file.txt": "edited\n"})
+	manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{}, "")
+	initialCommits := countRemoteCommits(t, remoteURL)
+
+	_, err := manager.WriteFile(remoteURL, testBranch, "file.txt", "template\n", nil, false, testCommitOptions("create"))
+	if err == nil || !strings.Contains(err.Error(), "already exists with different content") {
+		t.Fatalf("WriteFile() create error = %v", err)
+	}
+	if got := readRemoteFile(t, remoteURL, "file.txt"); got != "edited\n" {
+		t.Fatalf("remote content after refused create = %q", got)
+	}
+
+	sameResult, err := manager.WriteFile(remoteURL, testBranch, "file.txt", "edited\n", nil, false, testCommitOptions("create same"))
+	if err != nil {
+		t.Fatalf("WriteFile() create with matching content error = %v", err)
+	}
+	if sameResult.Changed {
+		t.Fatalf("WriteFile() create with matching content changed = true")
+	}
+	if got := countRemoteCommits(t, remoteURL); got != initialCommits {
+		t.Fatalf("commit count = %d, want %d", got, initialCommits)
+	}
+
+	if _, err := manager.WriteFile(remoteURL, testBranch, "file.txt", "template\n", nil, true, testCommitOptions("overwrite")); err != nil {
+		t.Fatalf("WriteFile() overwrite error = %v", err)
+	}
+	if got := readRemoteFile(t, remoteURL, "file.txt"); got != "template\n" {
+		t.Fatalf("remote content after overwrite = %q", got)
 	}
 }
 
@@ -208,7 +240,7 @@ func TestCloneManagerSharedCloneSerializesOperations(t *testing.T) {
 		wg.Add(1)
 		go func(path, content string) {
 			defer wg.Done()
-			_, err := manager.WriteFile(remoteURL, testBranch, path, content, nil, testCommitOptions("write "+path))
+			_, err := manager.WriteFile(remoteURL, testBranch, path, content, nil, true, testCommitOptions("write "+path))
 			errs <- err
 		}(path, content)
 	}
@@ -252,7 +284,7 @@ func TestCloneManagerPushBranchCreatedFromBranch(t *testing.T) {
 		t.Fatalf("push branch exists after read")
 	}
 
-	if _, err := manager.WriteFile(remoteURL, testBranch, "a.txt", "a\n", nil, testCommitOptions("create a")); err != nil {
+	if _, err := manager.WriteFile(remoteURL, testBranch, "a.txt", "a\n", nil, true, testCommitOptions("create a")); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	if got := readRemoteBranchFile(t, remoteURL, testPushBranch, "a.txt"); got != "a\n" {
@@ -271,7 +303,7 @@ func TestCloneManagerPushBranchReusedWhenPresent(t *testing.T) {
 	initialCommits := countRemoteCommits(t, remoteURL)
 
 	first := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{}, testPushBranch)
-	if _, err := first.WriteFile(remoteURL, testBranch, "README.md", "staged\n", nil, testCommitOptions("stage")); err != nil {
+	if _, err := first.WriteFile(remoteURL, testBranch, "README.md", "staged\n", nil, true, testCommitOptions("stage")); err != nil {
 		t.Fatalf("WriteFile(stage) error = %v", err)
 	}
 
@@ -285,7 +317,7 @@ func TestCloneManagerPushBranchReusedWhenPresent(t *testing.T) {
 	}
 
 	expected := "staged\n"
-	if _, err := second.WriteFile(remoteURL, testBranch, "README.md", "again\n", &expected, testCommitOptions("again")); err != nil {
+	if _, err := second.WriteFile(remoteURL, testBranch, "README.md", "again\n", &expected, true, testCommitOptions("again")); err != nil {
 		t.Fatalf("WriteFile(again) error = %v", err)
 	}
 	if got := countRemoteBranchCommits(t, remoteURL, testPushBranch); got != initialCommits+2 {
@@ -306,12 +338,12 @@ func TestCloneManagerRetriesRejectedPush(t *testing.T) {
 			manager := newCloneManager(filepath.Join(t.TempDir(), "cache"), authConfig{}, pushBranch)
 			work := manager.workBranch(testBranch)
 
-			if _, err := manager.WriteFile(remoteURL, testBranch, "a.txt", "a\n", nil, testCommitOptions("create a")); err != nil {
+			if _, err := manager.WriteFile(remoteURL, testBranch, "a.txt", "a\n", nil, true, testCommitOptions("create a")); err != nil {
 				t.Fatalf("WriteFile(a.txt) error = %v", err)
 			}
 			externalBranchCommit(t, remoteURL, work, "b.txt", "b\n")
 
-			if _, err := manager.WriteFile(remoteURL, testBranch, "c.txt", "c\n", nil, testCommitOptions("create c")); err != nil {
+			if _, err := manager.WriteFile(remoteURL, testBranch, "c.txt", "c\n", nil, true, testCommitOptions("create c")); err != nil {
 				t.Fatalf("WriteFile(c.txt) error = %v", err)
 			}
 			for repoPath, want := range map[string]string{"a.txt": "a\n", "b.txt": "b\n", "c.txt": "c\n"} {
@@ -333,7 +365,7 @@ func TestCloneManagerRetryRechecksDrift(t *testing.T) {
 	externalCommit(t, remoteURL, "file.txt", "remote\n")
 
 	expected := "state\n"
-	_, err := manager.WriteFile(remoteURL, testBranch, "file.txt", "desired\n", &expected, testCommitOptions("update"))
+	_, err := manager.WriteFile(remoteURL, testBranch, "file.txt", "desired\n", &expected, true, testCommitOptions("update"))
 	if err == nil || !strings.Contains(err.Error(), "changed outside Terraform") {
 		t.Fatalf("WriteFile() drift error = %v", err)
 	}
