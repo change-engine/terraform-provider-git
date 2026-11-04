@@ -39,3 +39,11 @@ Computed:
 - `commit_sha` - Commit SHA at which the file content was last observed or written.
 - `blob_sha` - Git blob SHA for the file content.
 - `last_remote_commit_sha` - Remote branch commit SHA observed immediately before the most recent operation.
+
+## Import
+
+Import a file that is already in the repository by its ID, `repository_url|branch|path`:
+
+```shell
+tofu import git_file.example 'https://github.com/example/repo.git|main|README.md'
+```
