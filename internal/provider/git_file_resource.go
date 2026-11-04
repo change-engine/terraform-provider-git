@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -14,8 +15,9 @@ import (
 )
 
 var (
-	_ resource.Resource              = (*gitFileResource)(nil)
-	_ resource.ResourceWithConfigure = (*gitFileResource)(nil)
+	_ resource.Resource                = (*gitFileResource)(nil)
+	_ resource.ResourceWithConfigure   = (*gitFileResource)(nil)
+	_ resource.ResourceWithImportState = (*gitFileResource)(nil)
 )
 
 func NewGitFileResource() resource.Resource {
@@ -228,6 +230,19 @@ func (r *gitFileResource) Delete(ctx context.Context, req resource.DeleteRequest
 	resp.State.RemoveResource(ctx)
 }
 
+func (r *gitFileResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	repositoryURL, branch, repoPath, err := parseResourceID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Import git_file failed", err.Error())
+		return
+	}
+	// Read fills in the content and SHAs; the rest comes from the configuration on the next plan.
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("repository_url"), repositoryURL)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("branch"), branch)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("path"), repoPath)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+}
+
 func (r *gitFileResource) commitOptions(model gitFileResourceModel, defaultMessage string) commitOptions {
 	message := stringValue(model.CommitMessage)
 	if message == "" {
@@ -257,6 +272,14 @@ func setResourceComputed(model *gitFileResourceModel, commitSHA, blobSHA, lastRe
 
 func resourceID(repositoryURL, branch, repoPath string) string {
 	return repositoryURL + "|" + branch + "|" + repoPath
+}
+
+func parseResourceID(id string) (string, string, string, error) {
+	parts := strings.SplitN(id, "|", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", "", fmt.Errorf("expected an ID of the form repository_url|branch|path, got %q", id)
+	}
+	return parts[0], parts[1], parts[2], nil
 }
 
 func firstNonEmpty(values ...string) string {
