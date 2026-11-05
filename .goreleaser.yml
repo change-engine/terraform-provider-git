@@ -16,22 +16,22 @@ builds:
     - -trimpath
   ldflags:
     - '-s -w -X main.version={{.Version}} -X main.commit={{.Commit}}'
-  goos:
-    - freebsd
-    - windows
-    - linux
-    - darwin
-  goarch:
-    - amd64
-    - '386'
-    - arm
-    - arm64
-  ignore:
-    - goos: darwin
-      goarch: '386'
+  # HashiCorp's recommended platforms plus freebsd/amd64 and windows/arm64:
+  # https://developer.hashicorp.com/terraform/registry/providers/os-arch
+  targets:
+    - darwin_amd64
+    - darwin_arm64
+    - freebsd_amd64
+    - linux_amd64
+    - linux_arm64
+    - linux_arm_6
+    - linux_s390x
+    - windows_amd64
+    - windows_arm64
   binary: '{{ .ProjectName }}_v{{ .Version }}'
 archives:
-- format: zip
+- formats:
+  - zip
   name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
 checksum:
   extra_files:
